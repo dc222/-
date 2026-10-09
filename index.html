@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课堂互动 · 图片实时上传</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f4f8; min-height:100vh; }
+  .container { max-width:900px; margin:0 auto; padding:20px; }
+  header { text-align:center; padding:24px 0 12px; }
+  header h1 { font-size:22px; color:#1a2b4a; }
+  header p { color:#7a8aa0; font-size:13px; margin-top:6px; }
+  .card { background:#fff; border-radius:14px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,.06); margin-bottom:16px; }
+  .hidden { display:none !important; }
+  label { display:block; font-size:13px; color:#5a6b82; margin-bottom:6px; }
+  input[type=text] { width:100%; padding:12px 14px; border:1.5px solid #dfe6ee; border-radius:10px; font-size:15px; outline:none; }
+  input[type=text]:focus { border-color:#4a7dff; }
+  .btn { display:inline-block; width:100%; padding:13px; border:none; border-radius:10px; font-size:16px; cursor:pointer; }
+  .btn-primary { background:#4a7dff; color:#fff; }
+  .btn-primary:disabled { background:#a9c0f5; cursor:not-allowed; }
+  .status { font-size:13px; padding:10px 14px; border-radius:8px; margin-top:12px; text-align:center; }
+  .status.ok { background:#e6f7ec; color:#1a9e4b; }
+  .status.err { background:#fdecec; color:#d93025; }
+  .status.wait { background:#fff7e0; color:#b7791f; }
+  /* 教师端 */
+  .room-code { font-size:34px; font-weight:700; letter-spacing:6px; color:#4a7dff; text-align:center; margin:8px 0; }
+  #qrcode { display:flex; justify-content:center; padding:14px; background:#fff; border-radius:12px; }
+  #qrcode img, #qrcode canvas { border-radius:8px; }
+  .conn-count { text-align:center; color:#7a8aa0; font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; margin-top:8px; }
+  .photo { background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.08); position:relative; }
+  .photo img { width:100%; height:150px; object-fit:cover; display:block; cursor:pointer; }
+  .photo .meta { padding:8px 10px; font-size:12px; color:#5a6b82; }
+  .photo .meta b { color:#1a2b4a; display:block; font-size:13px; margin-bottom:2px; }
+  .badge-new { position:absolute; top:8px; right:8px; background:#ff5252; color:#fff; font-size:11px; padding:2px 8px; border-radius:20px; }
+  .empty { text-align:center; color:#a5b4c8; padding:40px 0; font-size:14px; }
+  .toolbar { display:flex; gap:10px; margin-top:10px; }
+  .toolbar .btn { font-size:14px; padding:10px; }
+  .btn-ghost { background:#eef2f8; color:#4a5b74; }
+  /* 学生端 */
+  .preview { width:100%; border-radius:10px; margin:12px 0; display:none; max-height:260px; object-fit:contain; background:#f7f9fc; }
+  .progress { height:6px; background:#e8eef6; border-radius:3px; overflow:hidden; margin-top:10px; display:none; }
+  .progress > div { height:100%; background:#4a7dff; width:0%; transition:width .2s; }
+  /* 大图弹窗 */
+  #lightbox { position:fixed; inset:0; background:rgba(0,0,0,.88); display:none; align-items:center; justify-content:center; z-index:99; flex-direction:column; }
+  #lightbox img { max-width:92%; max-height:80vh; border-radius:8px; }
+  #lightbox p { color:#fff; margin-top:14px; font-size:14px; }
+  #lightbox a { color:#8fb3ff; margin-top:8px; font-size:13px; }
+  .switch-link { display:block; text-align:center; margin-top:16px; font-size:13px; color:#4a7dff; text-decoration:none; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>📷 课堂图片互动</h1>
+    <p>学生扫码上传图片 · 教师端实时接收</p>
+  </header>
+
+  <!-- ============ 教师端 ============ -->
+  <div id="teacher-view">
+    <div class="card">
+      <label>课堂码（学生也可手动输入此码加入）</label>
+      <div class="room-code" id="room-code">------</div>
+      <div id="qrcode"></div>
+      <p class="conn-count" id="conn-count">等待学生连接…</p>
+      <div class="toolbar">
+        <button class="btn btn-ghost" id="btn-fullscreen">投屏全屏</button>
+        <button class="btn btn-ghost" id="btn-clear">清空已收图片</button>
+        <button class="btn btn-ghost" id="btn-new">新建课堂</button>
+        <button class="btn btn-ghost" id="btn-join">学生输码入口</button>
+      </div>
+      <div class="status wait" id="t-status">正在初始化…</div>
+    </div>
+    <div class="card">
+      <label>实时接收区</label>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty-hint">暂无学生上传，收到的图片会实时显示在这里</div>
+    </div>
+  </div>
+
+
+  <!-- ============ 学生手动加入 ============ -->
+  <div id="join-view" class="hidden">
+    <div class="card">
+      <label>输入教师屏幕上显示的 6 位课堂码</label>
+      <input type="text" id="join-code" placeholder="例如 A3B7C9" maxlength="6" style="text-transform:uppercase;text-align:center;font-size:22px;letter-spacing:4px;">
+      <div style="height:14px"></div>
+      <button class="btn btn-primary" id="btn-join-go">进入课堂</button>
+      <div class="status wait" id="j-status"></div>
+    </div>
+  </div>
+
+  <!-- ============ 学生端 ============ -->
+  <div id="student-view" class="hidden">
+    <div class="card">
+      <label>你的姓名</label>
+      <input type="text" id="stu-name" placeholder="输入姓名，方便老师识别" maxlength="20">
+      <div style="height:14px"></div>
+      <label>选择要上传的图片（作业 / 笔记 / 答题过程）</label>
+      <input type="file" id="stu-file" accept="image/*">
+      <img class="preview" id="preview" alt="">
+      <div class="progress" id="progress"><div></div></div>
+      <div style="height:14px"></div>
+      <button class="btn btn-primary" id="btn-send" disabled>发送给教师</button>
+      <div class="status wait" id="s-status">正在连接教师端…</div>
+    </div>
+  </div>
+
+  <a class="switch-link" id="switch-link" href="#"></a>
+</div>
+
+<div id="lightbox">
+  <img id="lb-img" src="" alt="">
+  <p id="lb-meta"></p>
+  <a id="lb-download" download>下载原图</a>
+</div>
+
+<script>
+/* ---------- 基础工具 ---------- */
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const roomFromUrl = (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const NS = 'kimi-class-';                 // PeerID 命名空间
+const CHUNK = 45000;                      // 每片 base64 长度（安全上限内）
+
+/* ---------- 图片压缩（减少传输量） ---------- */
+function compressImage(file, cb) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1600;
+      let { width: w, height: h } = img;
+      if (w > MAX || h > MAX) { const r = Math.min(MAX/w, MAX/h); w = Math.round(w*r); h = Math.round(h*r); }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      cb(c.toDataURL('image/jpeg', 0.82).split(',')[1]);   // 仅 base64 部分
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ================= 教师端 ================= */
+function startTeacher(roomCode) {
+  $('teacher-view').classList.remove('hidden');
+  $('switch-link').textContent = '切换到学生加入页面';
+  $('switch-link').href = location.pathname + '?room=' + roomCode;
+  $('room-code').textContent = roomCode;
+  $('t-status').className = 'status wait';
+  $('t-status').textContent = '正在初始化…';
+
+  const peer = new Peer(NS + roomCode, { debug: 1 });
+  const received = {};   // uploadId -> {meta, chunks:[]}
+  let studentCount = 0;
+
+  peer.on('open', () => {
+    $('t-status').className = 'status ok';
+    $('t-status').textContent = '✅ 课堂已开启，学生扫码或输入课堂码即可加入';
+    const studentUrl = location.origin + location.pathname + '?room=' + roomCode;
+    new QRCode($('qrcode'), { text: studentUrl, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  });
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id') {   // 课堂码被占用 → 换新码
+      startTeacher(makeCode());
+    } else {
+      $('t-status').className = 'status err';
+      $('t-status').textContent = '连接出错：' + err.type;
+    }
+  });
+  peer.on('connection', conn => {
+    conn.on('open', () => {
+      studentCount++;
+      updateCount();
+      conn.on('data', msg => handleMsg(conn, msg));
+      conn.on('close', () => { studentCount = Math.max(0, studentCount - 1); updateCount(); });
+    });
+  });
+
+  function updateCount() {
+    $('conn-count').textContent = studentCount > 0 ? `已有 ${studentCount} 名学生在线` : '等待学生连接…';
+  }
+
+  function handleMsg(conn, msg) {
+    if (!msg || !msg.uploadId) return;
+    if (msg.type === 'meta') {
+      received[msg.uploadId] = { meta: msg, chunks: new Array(msg.total).fill(null), conn };
+      conn.send({ type: 'ack', uploadId: msg.uploadId });     // 回执，学生端可显示进度
+    } else if (msg.type === 'chunk') {
+      const r = received[msg.uploadId];
+      if (!r) return;
+      r.chunks[msg.index] = msg.data;
+      const done = r.chunks.filter(Boolean).length;
+      if (done === r.meta.total) finishUpload(msg.uploadId);
+    }
+  }
+
+  function finishUpload(uploadId) {
+    const r = received[uploadId];
+    if (!r) return;
+    const dataUrl = 'data:image/jpeg;base64,' + r.chunks.join('');
+    const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const card = document.createElement('div');
+    card.className = 'photo';
+    card.innerHTML = `<span class="badge-new">新</span>
+      <img src="${dataUrl}" alt="">
+      <div class="meta"><b></b><span>${time}</span></div>`;
+    card.querySelector('b').textContent = r.meta.name || '未命名学生';
+    card.querySelector('img').onclick = () => {
+      $('lb-img').src = dataUrl;
+      $('lb-meta').textContent = (r.meta.name || '未命名学生') + ' · ' + time;
+      $('lb-download').href = dataUrl;
+      $('lb-download').download = (r.meta.name || 'student') + '_' + time.replace(/:/g, '-') + '.jpg';
+      $('lightbox').style.display = 'flex';
+    };
+    $('grid').prepend(card);
+    $('empty-hint').style.display = 'none';
+    delete received[uploadId];
+    setTimeout(() => card.querySelector('.badge-new').remove(), 5000);
+  }
+
+  $('btn-clear').onclick = () => { $('grid').innerHTML = ''; $('empty-hint').style.display = 'block'; };
+  $('btn-new').onclick = () => { peer.destroy(); startTeacher(makeCode()); };
+  $('btn-fullscreen').onclick = () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen();
+  };
+  $('btn-join').onclick = () => {
+    const code = prompt('请学生在手机浏览器打开本网页地址，然后在弹出的输入框中填写课堂码：' + roomCode + '\n\n（或直接把下面的链接发给学生）',
+      location.origin + location.pathname + '?room=' + roomCode);
+  };
+}
+
+/* ================= 学生端 ================= */
+function startStudent(roomCode) {
+  $('student-view').classList.remove('hidden');
+  $('switch-link').textContent = '我是教师，去开启课堂';
+  $('switch-link').href = location.pathname;
+  const st = $('s-status');
+  const myPeer = new Peer({ debug: 1 });
+  let conn = null;
+  let sending = false;
+
+  myPeer.on('open', () => {
+    conn = myPeer.connect(NS + roomCode, { reliable: true });
+    conn.on('open', () => {
+      st.className = 'status ok';
+      st.textContent = '✅ 已连接教师端，可以上传图片了';
+    });
+    conn.on('close', () => { st.className = 'status err'; st.textContent = '与教师端断开，请刷新重试'; $('btn-send').disabled = true; });
+    conn.on('error', () => { st.className = 'status err'; st.textContent = '连接失败，请确认课堂码是否正确'; });
+  });
+  myPeer.on('error', err => {
+    st.className = 'status err';
+    st.textContent = err.type === 'peer-unavailable' ? '找不到该课堂，请检查课堂码' : '连接出错：' + err.type;
+  });
+
+  $('stu-file').onchange = e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = ev => { const p = $('preview'); p.src = ev.target.result; p.style.display = 'block'; };
+    reader.readAsDataURL(f);
+    $('btn-send').disabled = false;
+  };
+
+  $('btn-send').onclick = () => {
+    const file = $('stu-file').files[0];
+    const name = $('stu-name').value.trim() || '未命名学生';
+    if (!file || sending) return;
+    if (!conn || !conn.open) { st.className = 'status err'; st.textContent = '尚未连接教师端'; return; }
+    sending = true;
+    $('btn-send').disabled = true;
+    st.className = 'status wait';
+    st.textContent = '正在处理图片…';
+
+    compressImage(file, b64 => {
+      const uploadId = myPeer.id + '_' + Date.now();
+      const total = Math.ceil(b64.length / CHUNK);
+      const bar = $('progress'), barInner = bar.firstElementChild;
+      bar.style.display = 'block'; barInner.style.width = '0%';
+
+      conn.send({ type: 'meta', uploadId, total, name });
+      let i = 0, acked = 0;
+
+      conn.on('data', msg => {           // 教师端回执驱动进度条
+        if (msg && msg.type === 'ack' && msg.uploadId === uploadId) {
+          acked++;
+          barInner.style.width = Math.round(acked / total * 100) + '%';
+          if (acked === total) {
+            st.className = 'status ok';
+            st.textContent = '✅ 发送成功！老师已收到你的图片';
+            setTimeout(() => { bar.style.display = 'none'; }, 800);
+          }
+        }
+      });
+
+      (function sendNext() {            // 逐片发送，避免堵塞通道
+        if (i >= total) { sending = false; $('btn-send').disabled = false; return; }
+        conn.send({ type: 'chunk', uploadId, index: i, data: b64.slice(i * CHUNK, (i + 1) * CHUNK) });
+        i++;
+        setTimeout(sendNext, 0);
+      })();
+    });
+  };
+}
+
+/* ---------- 入口路由 ---------- */
+function makeCode() {
+  const c = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  return Array.from({ length: 6 }, () => c[Math.floor(Math.random() * c.length)]).join('');
+}
+function showJoin() {
+  $('teacher-view').classList.add('hidden');
+  $('join-view').classList.remove('hidden');
+  $('switch-link').textContent = '我是教师，去开启课堂';
+  $('switch-link').href = location.pathname + '#teacher';
+  const go = () => {
+    const c = $('join-code').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (c.length >= 4) location.href = location.pathname + '?room=' + c;
+    else $('j-status').textContent = '请输入正确的课堂码';
+  };
+  $('btn-join-go').onclick = go;
+  $('join-code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
+if (roomFromUrl.length >= 4) startStudent(roomFromUrl);
+else if (location.hash === '#teacher' || !('ontouchstart' in window) && window.innerWidth > 760) startTeacher(makeCode());
+else showJoin();
+
+/* 大图弹窗点击关闭 */
+$('lightbox').onclick = () => $('lightbox').style.display = 'none';
+</script>
+</body>
+</html>
