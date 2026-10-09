@@ -4,8 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>课堂互动 · 图片实时上传</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+/* 多源降级加载：哪个通用哪个，全部失败才报错 */
+function loadScript(urls, ok, fail) {
+  (function tryLoad(i) {
+    if (i >= urls.length) return fail && fail();
+    var s = document.createElement('script');
+    s.src = urls[i];
+    s.onload = ok;
+    s.onerror = function () { tryLoad(i + 1); };
+    document.head.appendChild(s);
+  })(0);
+}
+var LIB_ERR = false;
+loadScript([
+  'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
+  'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js'
+], function () {
+  loadScript([
+    'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
+    'https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js'
+  ], function () { window.__libsReady = true; }, function () { window.__libsReady = false; LIB_ERR = true; });
+}, function () { window.__libsReady = false; LIB_ERR = true; });
+</script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f4f8; min-height:100vh; }
@@ -51,6 +74,7 @@
   #lightbox a { color:#8fb3ff; margin-top:8px; font-size:13px; }
   .switch-link { display:block; text-align:center; margin-top:16px; font-size:13px; color:#4a7dff; text-decoration:none; }
 </style>
+<base target="_blank">
 </head>
 <body>
 
@@ -173,6 +197,7 @@ function startTeacher(roomCode) {
       $('t-status').textContent = '连接出错：' + err.type;
     }
   });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch(e){} });
   peer.on('connection', conn => {
     conn.on('open', () => {
       studentCount++;
@@ -254,6 +279,19 @@ function startStudent(roomCode) {
     });
     conn.on('close', () => { st.className = 'status err'; st.textContent = '与教师端断开，请刷新重试'; $('btn-send').disabled = true; });
     conn.on('error', () => { st.className = 'status err'; st.textContent = '连接失败，请确认课堂码是否正确'; });
+    conn.on('iceStateChanged', state => {
+      if (state === 'disconnected' || state === 'failed') {
+        st.className = 'status err';
+        st.textContent = '网络通道被阻断：校园网可能限制了直连，建议手机切到 4G/5G 或教师手机热点后刷新';
+      }
+    });
+    clearTimeout(window.__connTimeout);
+    window.__connTimeout = setTimeout(() => {
+      if (!conn.open) {
+        st.className = 'status err';
+        st.textContent = '⏱ 连接超时（20秒）。请检查：1) 课堂码是否输对 2) 教师页面是否还开着 3) 换个网络（热点）刷新试试';
+      }
+    }, 20000);
   });
   myPeer.on('error', err => {
     st.className = 'status err';
@@ -328,9 +366,24 @@ function showJoin() {
   $('btn-join-go').onclick = go;
   $('join-code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
 }
-if (roomFromUrl.length >= 4) startStudent(roomFromUrl);
-else if (location.hash === '#teacher' || !('ontouchstart' in window) && window.innerWidth > 760) startTeacher(makeCode());
-else showJoin();
+function boot() {
+  if (!window.__libsReady) {
+    var tip = document.createElement('div');
+    tip.className = 'status err'; tip.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999;max-width:90%';
+    tip.textContent = '⚠️ 网络组件加载失败：请切换网络（如改用手机热点）后刷新页面';
+    document.body.appendChild(tip);
+    var t = document.getElementById('t-status'); if (t) { t.className = 'status err'; t.textContent = tip.textContent; }
+    var s = document.getElementById('s-status'); if (s) { s.className = 'status err'; s.textContent = tip.textContent; }
+    return;
+  }
+  if (roomFromUrl.length >= 4) startStudent(roomFromUrl);
+  else if (location.hash === '#teacher' || !('ontouchstart' in window) && window.innerWidth > 760) startTeacher(makeCode());
+  else showJoin();
+}
+(function waitLibs(n) {
+  if (window.__libsReady !== undefined || n > 100) return boot();   // 最多等 20 秒
+  setTimeout(function () { waitLibs(n + 1); }, 200);
+})(0);
 
 /* 大图弹窗点击关闭 */
 $('lightbox').onclick = () => $('lightbox').style.display = 'none';
